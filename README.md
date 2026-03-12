@@ -6,6 +6,43 @@
 
 ---
 
+## 0. 2026-03-12 最新驗證結果
+
+- Gateway 已改為 systemd user service 常駐執行
+- 內建 `web_search` 已改用 Gemini provider，不再依賴 Brave Search API key
+- Telegram 上的 web search 可正常工作，但 Gemini 搜尋偶爾會遇到 `503 high demand`
+- `image-gen` skill 已可在 Telegram 生成並回傳圖片
+- `video-gen` skill 已建立並被 OpenClaw 識別為 ready
+- Veo API 已手動驗證成功：
+  - 模型：`veo-3.1-generate-preview`
+  - 正確端點：`predictLongRunning`
+  - 正確流程：先建立 operation，再輪詢，最後下載 MP4
+- `stock-price` skill 可用，但 Yahoo Finance 仍可能出現 rate limit
+
+### 今天確認過的關鍵差異
+
+- Veo **不是** `:generateVideos`
+- Veo 正確 REST 端點是：
+  `https://generativelanguage.googleapis.com/v1beta/models/veo-3.1-generate-preview:predictLongRunning`
+- Veo request body **不是**單純：
+  `{ "prompt": "..." }`
+- Veo request body 應使用：
+
+```json
+{
+  "instances": [
+    {
+      "prompt": "A cute orange cat walking slowly in a sunny garden"
+    }
+  ],
+  "parameters": {
+    "aspectRatio": "16:9"
+  }
+}
+```
+
+---
+
 ## 1. 安裝方式
 
 OpenClaw 是 **CLI 工具**，不是 Docker container。`docker ps` 看不到任何東西是正常的。
@@ -29,6 +66,29 @@ OpenClaw 是 **CLI 工具**，不是 Docker container。`docker ps` 看不到任
 - 設定在 `channels.telegram` 裡
 - `dmPolicy: "pairing"`, `groupPolicy: "open"`
 - `streaming: "partial"` 支援串流回覆
+
+### 內建 web search 設定
+- 內建 `web_search` 與自訂 `web-search` skill 是兩套不同東西
+- 自訂 Tavily skill 不會自動覆蓋內建 `web_search`
+- 內建 `web_search` 已改用 Gemini：
+
+```json
+"tools": {
+  "web": {
+    "search": {
+      "enabled": true,
+      "provider": "gemini",
+      "gemini": {
+        "model": "gemini-2.5-flash",
+        "apiKey": "..."
+      }
+    }
+  }
+}
+```
+
+- 修改完 `openclaw.json` 後，如果目前 Gateway 還在用舊設定，要重啟實際在跑的 gateway process / service
+- 舊 session 可能會殘留 Brave 設定，需要清 session 或開新對話
 
 ---
 
@@ -79,6 +139,20 @@ triggers:
 - 用 Yahoo Finance API 查即時股價
 - 台股加 .TW (如 2330.TW)，美股直接用代碼
 
+#### video-gen (Google Veo)
+- 路徑: `~/.openclaw/skills/video-gen/SKILL.md`
+- 用 Veo 3.1 生成短影片
+- 模型：`veo-3.1-generate-preview`
+- 正確 API endpoint：
+  `https://generativelanguage.googleapis.com/v1beta/models/veo-3.1-generate-preview:predictLongRunning`
+- 呼叫方式：
+  1. `POST predictLongRunning`
+  2. 取得 operation name
+  3. 輪詢 operation 狀態
+  4. 從 `.response.generateVideoResponse.generatedSamples[0].video.uri` 取得影片下載網址
+  5. 下載成 mp4
+- 手動驗證結果：可成功下載有效 MP4
+
 ### 查看 Skills 指令
 ```bash
 openclaw skills list              # 列出所有 skills
@@ -126,6 +200,33 @@ openclaw skills info <name>       # 查看 skill 詳細資訊
 - 內建 bundled skill 如果 missing，不一定能直接用
 - **解法: 自建 skill 更可靠**
 
+### 坑 6: 改了設定但 Gateway 還在吃舊值
+- `openclaw.json` 改完，不代表目前正在跑的 gateway process 會立即套用
+- 這台一開始是舊的 `openclaw-gateway` process 還在跑，所以 `web_search` 仍然要求 Brave API key
+- **解法: 停掉舊 process，改成 systemd user service，並重新啟動**
+
+### 坑 7: 舊 session 不知道新 skill
+- 新增 `video-gen` 後，舊 Telegram 對話可能仍回「沒有 video-gen skill」
+- 原因是舊 session/context 沒刷新
+- **解法: 清掉 `~/.openclaw/agents/main/sessions/` 後重啟 gateway，並開全新對話**
+
+### 坑 8: image/video skill 寫死 API key 很危險
+- 一開始在 `SKILL.md` 內直接寫死 Google API key
+- 這樣雖然方便測試，但非常不安全，也不利後續維護
+- **解法: 一律改成讀環境變數 `GEMINI_API_KEY`**
+
+### 坑 9: Veo 端點名稱容易寫錯
+- 一開始誤用：
+  `.../models/veo-3.1-generate-preview:generateVideos`
+- 實測正確的是：
+  `.../models/veo-3.1-generate-preview:predictLongRunning`
+- **解法: 用 `predictLongRunning` + operation polling**
+
+### 坑 10: Ubuntu 只有 `python3`，不一定有 `python`
+- skill 執行過程中若呼叫 `python`，可能出現：
+  `python: command not found`
+- **解法: 改用 `python3`，或安裝 `python-is-python3`**
+
 ---
 
 ## 6. 常用指令速查
@@ -145,12 +246,16 @@ openclaw plugins list
 
 # Gateway
 openclaw gateway restart
+systemctl --user restart openclaw-gateway.service
+systemctl --user status openclaw-gateway.service --no-pager
 
 # Config
 cat ~/.openclaw/openclaw.json
 
 # Logs
 openclaw logs
+journalctl --user -u openclaw-gateway --since "10 min ago" --no-pager
+journalctl --user -u openclaw-gateway -f
 
 # ClawHub (安裝社群 skills)
 npm install -g clawhub
@@ -161,7 +266,11 @@ clawhub install <slug>
 ---
 
 ## 7. 待測試 / TODO
-- [ ] 在 Telegram 測試 web-search skill
-- [ ] 在 Telegram 測試 image-gen skill (圖片是否能正確傳送)
+- [x] 在 Telegram 測試內建 web search (Gemini provider)
+- [x] 在 Telegram 測試 image-gen skill (可正確傳送圖片)
+- [x] 手動驗證 Veo API 與 mp4 下載流程
+- [ ] 在 Telegram 完整測通 video-gen skill (由 bot 自動跑完整 Veo 流程)
+- [ ] 建立 bus-realtime skill，待 TDX 審核通過後接正式 API
 - [ ] 研究 nano-banana 完整名稱，看能否啟用內建的圖片生成 skill
-- [ ] 安全性: 重新生成 Telegram bot token 和 gateway token
+- [ ] 安全性: 重新生成 Telegram bot token、gateway token、GEMINI_API_KEY
+- [ ] 安全性: 將 Telegram `groupPolicy` 從 `open` 改成 `allowlist`
