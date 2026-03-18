@@ -1,6 +1,12 @@
 ---
 name: bus-realtime
 description: "查詢台灣公車即時到站時間。當使用者輸入站名與公車號碼，想知道還有幾分鐘到站時使用。優先支援台北市與新北市。"
+triggers:
+  - "公車"
+  - "到站"
+  - "幾分"
+  - "幾分鐘"
+  - "bus"
 ---
 
 # Bus Realtime Skill
