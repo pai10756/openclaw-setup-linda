@@ -6,7 +6,23 @@
 
 ---
 
-## 0. 2026-03-12 最新驗證結果
+## 0. 更新紀錄
+
+### 2026-03-20: 模型切換與 Session 優化
+
+- 原主模型 `gemini-2.5-flash` TPM 已滿，改為：
+  - **主模型**: `google/gemini-3.1-flash-lite-preview`
+  - **Fallback**: `google/gemini-2.0-flash`
+- Session token 優化設定：
+  - `compaction.mode`: `aggressive`（積極壓縮對話歷史）
+  - `compaction.autoCompactThreshold`: `0.70`（context 用到 70% 就自動壓縮）
+  - `compaction.maxTurns`: `20`
+  - `compaction.maxTokens`: `8000`
+  - `contextTokens`: `50000`（context 上限 50K tokens）
+  - `maxHistoryMessages`: `30`（最多保留 30 則歷史訊息）
+- 清 session 方式：`rm -rf ~/.openclaw/agents/main/sessions/*` + 重啟 gateway
+
+### 2026-03-12: 驗證結果
 
 - Gateway 已改為 systemd user service 常駐執行
 - 內建 `web_search` 已改用 Gemini provider，不再依賴 Brave Search API key
@@ -57,7 +73,11 @@ OpenClaw 是 **CLI 工具**，不是 Docker container。`docker ps` 看不到任
 
 ### 設定檔 `~/.openclaw/openclaw.json` 結構
 - `auth.profiles` — AI 模型的 API 認證 (Google API key)
-- `agents.defaults.model.primary` — 預設模型 (google/gemini-2.5-flash)
+- `agents.defaults.model.primary` — 預設模型 (目前: google/gemini-3.1-flash-lite-preview)
+- `agents.defaults.model.fallback` — 備用模型 (目前: google/gemini-2.0-flash)
+- `agents.defaults.compaction` — Session 壓縮策略
+- `agents.defaults.contextTokens` — Context token 上限
+- `agents.defaults.maxHistoryMessages` — 歷史訊息數上限
 - `channels.telegram` — Telegram bot 設定 (botToken, dmPolicy, groupPolicy)
 - `gateway` — Gateway 模式與認證 token
 - `plugins.entries` — 啟用的 plugins
@@ -227,6 +247,18 @@ openclaw skills info <name>       # 查看 skill 詳細資訊
   `python: command not found`
 - **解法: 改用 `python3`，或安裝 `python-is-python3`**
 
+### 坑 11: Session token 暴增導致 TPM 爆滿
+- 長對話會快速消耗 token 限額
+- 預設 compaction mode `safeguard` 太保守，不會主動壓縮
+- **解法: 改用 `aggressive` mode + 設定 `autoCompactThreshold: 0.70`**
+- 同時限制 `contextTokens: 50000` 和 `maxHistoryMessages: 30`
+- 社群推薦參考：[OpenClaw Compaction Docs](https://docs.openclaw.ai/concepts/compaction)
+
+### 坑 12: 主模型 TPM 用完時沒有 fallback
+- 只設一個主模型，TPM 用完就整個 bot 不回覆
+- **解法: 加 `model.fallback` 設定備用模型**
+- 例：主模型 `gemini-3.1-flash-lite-preview`，fallback `gemini-2.0-flash`
+
 ---
 
 ## 6. 常用指令速查
@@ -256,6 +288,10 @@ cat ~/.openclaw/openclaw.json
 openclaw logs
 journalctl --user -u openclaw-gateway --since "10 min ago" --no-pager
 journalctl --user -u openclaw-gateway -f
+
+# Session 管理
+rm -rf ~/.openclaw/agents/main/sessions/*   # 清掉所有 session
+systemctl --user restart openclaw-gateway.service  # 重啟 gateway 套用新設定
 
 # ClawHub (安裝社群 skills)
 npm install -g clawhub
